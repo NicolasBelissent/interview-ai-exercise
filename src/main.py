@@ -11,13 +11,20 @@ from src.loading.document_loader import (
     get_json_data,
     split_docs,
 )
+import redis
+import json
 from src.models import ChatOutput, ChatQuery, HealthRouteOutput, LoadDocumentsOutput
 from src.retrieval.retrieval import get_relevant_chunks
 from src.retrieval.vector_store import create_collection
+from src.retrieval.hybrid_retriever import ParallelHybridRetriever
+
 
 app = FastAPI()
 
 collection = create_collection(chroma_client, openai_ef, SETTINGS.collection_name)
+retriever = ParallelHybridRetriever(collection)
+retriever.load_bm25_from_cache()
+redis_client = redis.StrictRedis(host='localhost', port=6379, db=0, decode_responses=True)
 
 
 @app.get("/health")
@@ -29,17 +36,28 @@ def health_check_route() -> HealthRouteOutput:
 @app.get("/load")
 async def load_docs_route() -> LoadDocumentsOutput:
     """Route to load documents into vector store."""
-    json_data = get_json_data()
-    documents = build_docs(json_data)
+    api_specs_json = get_json_data()
 
-    # split docs
-    documents = split_docs(documents)
+    for json_data in api_specs_json:
+        if isinstance(json_data, str):
+            try:
+                json_data = json.loads(json_data)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON string: {json_data}") from e
+        if isinstance(json_data, dict):
+            documents = build_docs(json_data)
+        else:
+            raise TypeError(f"Expected a dictionary, but got {type(json_data)} after processing.")
 
-    # load documents into vector store
-    add_documents(collection, documents)
+        # split docs
+        documents = split_docs(documents)
 
-    # check the number of documents in the collection
-    print(f"Number of documents in collection: {collection.count()}")
+        # load documents into vector store
+        retriever.index_data(documents)
+        # add_documents(collection, documents)
+
+        # check the number of documents in the collection
+        print(f"Number of documents in collection: {collection.count()}")
 
     return LoadDocumentsOutput(status="ok")
 
@@ -48,8 +66,7 @@ async def load_docs_route() -> LoadDocumentsOutput:
 def chat_route(chat_query: ChatQuery) -> ChatOutput:
     """Chat route to chat with the API."""
     # Get relevant chunks from the collection
-    relevant_chunks = get_relevant_chunks(
-        collection=collection, query=chat_query.query, k=SETTINGS.k_neighbors
+    relevant_chunks = get_relevant_chunks(query=chat_query.query, retriever=retriever, k=SETTINGS.k_neighbors
     )
 
     # Create prompt with context

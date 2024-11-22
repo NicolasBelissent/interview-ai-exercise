@@ -27,11 +27,9 @@ class Settings(BaseSettings):
     embeddings_model: str = "text-embedding-3-small"
 
     collection_name: str = "documents"
-    chunk_size: int = 1000
+    chunk_size: int = 2000
     k_neighbors: int = 5
 
-    # You will want to point towards all of the specs not just this one
-    docs_url: str = "https://docs.stackone.com/openapi/646b2d607eeee7006f8898bf"
 
 
 SETTINGS = Settings()  # type: ignore
